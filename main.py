@@ -89,6 +89,6 @@ def post_to_telegram(name, aka_list, image_url, cid):
 
 if __name__ == "__main__":
     print("Finding a random molecule...")
-    name, img, cid = get_random_molecule()
+    name, aka, img, cid = get_random_molecule()
     print(f"Found: {name} (CID: {cid})")
-    post_to_telegram(name, img, cid)
+    post_to_telegram(name, aka, img, cid)
