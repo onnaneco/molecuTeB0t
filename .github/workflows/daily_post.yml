@@ -1,12 +1,15 @@
 name: Daily Molecule Post
+
 on:
   schedule:
-    - cron: '0 18 * * *' # This runs every day at 12:00 PM UTC
-  workflow_dispatch:      # Allows you to run it manually for testing
+    - cron: '0 18 * * *'
+  workflow_dispatch:
 
 jobs:
   run-bot:
     runs-on: ubuntu-latest
+    permissions:
+      contents: write  # Allows the bot to save the posted_cids.txt
     steps:
       - name: Checkout code
         uses: actions/checkout@v3
@@ -23,3 +26,11 @@ jobs:
         env:
           TELEGRAM_TOKEN: ${{ secrets.TELEGRAM_TOKEN }}
         run: python main.py
+
+      - name: Commit and push changes
+        run: |
+          git config --local user.email "github-actions[bot]@users.noreply.github.com"
+          git config --local user.name "github-actions[bot]"
+          git add posted_cids.txt
+          git commit -m "Update posted molecules history" || exit 0
+          git push
