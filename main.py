@@ -1,11 +1,16 @@
 import requests
 import random
 import time
+import os
 
 # --- CONFIGURATION ---
-TELEGRAM_TOKEN = "8631464521:AAEUL0LgLm9NAbjzIKDTarY4P73m_FWu9mY"
+TELEGRAM_TOKEN = os.getenv("TELEGRAM_TOKEN")
 CHANNEL_ID = "@moleculesdaily"  # Include the '@'
 MAX_CID = 118000000  # PubChem has ~119 million compounds as of 2025
+
+# Safety check:
+if not TELEGRAM_TOKEN:
+    raise ValueError("No TELEGRAM_TOKEN found! Did you set it in GitHub Secrets?")
 
 def get_random_molecule():
     """Fetches a random valid molecule name and image URL from PubChem."""
