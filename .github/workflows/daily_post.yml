@@ -26,10 +26,10 @@ jobs:
           TELEGRAM_TOKEN: ${{ secrets.TELEGRAM_TOKEN }}
         run: python main.py
 
-      - name: Save History
+      - name: Commit history
         run: |
           git config --local user.email "action@github.com"
           git config --local user.name "GitHub Action"
           git add posted_cids.txt
-          git commit -m "Update post history" || exit 0
+          git commit -m "Update history" || exit 0
           git push
