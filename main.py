@@ -1,16 +1,12 @@
 import requests
 import random
-import time
+import sys
 import os
 
 # --- CONFIGURATION ---
 TELEGRAM_TOKEN = os.getenv("TELEGRAM_TOKEN")
 CHANNEL_ID = "@moleculesdaily"  # Include the '@'
-MAX_CID = 118000000  # PubChem has ~119 million compounds as of 2025
-
-# Safety check:
-if not TELEGRAM_TOKEN:
-    raise ValueError("No TELEGRAM_TOKEN found! Did you set it in GitHub Secrets?")
+MAX_CID = 150000000  # PubChem has ~119 million compounds as of 2025
 
 def get_random_molecule():
     """Fetches a random valid molecule name and image URL from PubChem."""
@@ -29,20 +25,26 @@ def get_random_molecule():
                 # Get the first synonym (usually the most common name)
                 name = data['InformationList']['Information'][0]['Synonym'][0]
                 return name, image_url, cid
-            elif response.status_code == 404:
-                # CID doesn't exist, try another one
+            else:
+                print(f"CID {cid} doesn't exist, try another one")
                 continue
         except Exception as e:
             print(f"Error fetching CID {cid}: {e}")
-            time.sleep(1)
+            sys.exit(1)
 
 def post_to_telegram(name, image_url, cid):
+    # Safety check:
+    if not TELEGRAM_TOKEN:
+        raise ValueError("No TELEGRAM_TOKEN found! Did you set it in GitHub Secrets?")
+        sys.exit(1)
+
+    
     """Posts the molecule to the Telegram channel."""
     api_url = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendPhoto"
     
     caption = (
         f"Name: {name}\n"
-        f"PubChem CID: [{cid}](https://pubchem.ncbi.nlm.nih.gov/compound/{cid})"
+        f"PubChem CID: [{cid}]"
     )
     
     payload = {
@@ -56,10 +58,11 @@ def post_to_telegram(name, image_url, cid):
     if response.status_code == 200:
         print(f"Successfully posted: {name}")
     else:
-        print(f"Failed to post: {response.text}")
+        print(f"Failed to post: {response.status_code} - {response.text}")
+        sys.exit(1)
 
-if name == "__main__":
+if __name__ == "__main__":
     print("Finding a random molecule...")
-    name, image_url, cid = get_random_molecule()
+    name, img, cid = get_random_molecule()
     print(f"Found: {name} (CID: {cid})")
-    post_to_telegram(name, image_url, cid)
+    post_to_telegram(name, img, cid)
