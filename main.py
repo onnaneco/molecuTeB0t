@@ -7,119 +7,128 @@ import re
 # --- CONFIGURATION ---
 TELEGRAM_TOKEN = os.getenv("TELEGRAM_TOKEN")
 CHANNEL_ID = "@moleculesdaily"
+HISTORY_FILE = "posted_cids.txt"
 
-# Priority sources for descriptions
-DESC_SOURCES = [
+# Description Priority Sources
+PRIORITY_SOURCES = [
     {"name": "DrugBank", "label": "DrugBank"},
     {"name": "NCI Thesaurus", "label": "NCI Thesaurus (NCIt)"},
     {"name": "Medical Subject Headings", "label": "Medical Subject Headings (MeSH)"},
     {"name": "CAMEO Chemicals", "label": "CAMEO Chemicals"}
 ]
 
-def is_bad_name(name):
-    """Filters out database IDs and technical IUPAC-style names."""
-    if not name: return True
-    # Blacklist of database prefixes
-    bad_prefixes = [
-        "SCHEMBL", "ZINC", "AKOS", "NSC", "CAS-", "MFCD", "PUBCHEM", 
-        "CSL", "BCP", "STR", "AMBIT", "MCULE", "CHEMBL", "HY-", "ALB-"
-    ]
-    name_u = name.upper()
-    if any(name_u.startswith(p) for p in bad_prefixes):
-        return True
+def is_bad_name(name, iupac=""):
+    """Returns True if the name is a database ID or technical code."""
+    if not name or len(name) < 3: return True
+    # If the name is exactly the IUPAC name, we don't want it in 'Name' or 'AKA'
+    if iupac and name.lower() == iupac.lower(): return True
     
-    # Heuristic: If name has too many numbers/brackets/dashes, it's likely a technical IUPAC string
-    if len(re.findall(r'[0-9\[\(\-,]', name)) > 7:
-        return True
-        
+    u = name.upper()
+    bad_prefixes = [
+        "SCHEMBL", "ZINC", "AKOS", "NSC", "PUBCHEM", "CSL", "BCP", "STR", "AMBIT", 
+        "MCULE", "CHEMBL", "HY-", "ALB-", "SBB-", "BDBM", "GTPL", "STK", "YIL", 
+        "KSC", "CAS-", "MFCD", "HMS", "CHEBI", "CID", "PCID", "SMR", "US1", "MLS"
+    ]
+    if any(u.startswith(p) for p in bad_prefixes): return True
+    if re.match(r'^[0-9\-]{5,}$', name): return True # CAS or numeric codes
+    if len(re.findall(r'[0-9\[\(\-,]', name)) > 8: return True # Too many technical chars
     return False
 
-def get_description_and_source(cid):
-    """Fetches PUG VIEW data and extracts description based on priority."""
+def get_used_cids():
+    if os.path.exists(HISTORY_FILE):
+        with open(HISTORY_FILE, "r") as f:
+            return set(line.strip() for line in f if line.strip())
+    return set()
+
+def save_cid(cid):
+    with open(HISTORY_FILE, "a") as f:
+        f.write(f"{str(cid)}\n")
+
+def get_molecule_pool():
+    """Fetches a large pool of CIDs from high-quality sources."""
+    pool = []
+    print("Building high-quality molecule pool...")
+    # We fetch from DrugBank and NCI Thesaurus first as they have the best descriptions
+    for src in ["DrugBank", "NCI Thesaurus", "Medical Subject Headings (MeSH)"]:
+        try:
+            url = f"https://pubchem.ncbi.nlm.nih.gov/rest/pug/compound/sourceall/{src}/cids/JSON"
+            r = requests.get(url, timeout=15)
+            if r.status_code == 200:
+                cids = r.json().get('IdentifierList', {}).get('CID', [])
+                pool.extend(cids)
+        except: continue
+    return list(set(pool))
+
+def get_description_logic(cid):
+    """Deep-crawls the PUG VIEW for the specific prioritized descriptions."""
     url = f"https://pubchem.ncbi.nlm.nih.gov/rest/pug_view/data/compound/{cid}/JSON"
     try:
-        response = requests.get(url, timeout=15)
-        if response.status_code != 200: return None, None
-        data = response.json()
-        
-        sections = data.get('Record', {}).get('Section', [])
-        found_descriptions = {}
+        r = requests.get(url, timeout=10)
+        if r.status_code != 200: return None
+        data = r.json()
+        found = {}
 
-        def find_in_sections(node):
-            for item in node:
-                if 'Information' in item:
-                    for info in item['Information']:
-                        if 'Value' in info and 'StringWithMarkup' in info['Value'][0]:
-                            text = info['Value'][0]['StringWithMarkup'][0]['String']
-                            ref = info.get('Reference', '')
-                            # Check if reference matches our target sources
-                            for src in DESC_SOURCES:
+        def crawl(node):
+            if isinstance(node, list):
+                for i in node: crawl(i)
+            elif isinstance(node, dict):
+                if 'Information' in node:
+                    for info in node['Information']:
+                        text = info.get('Value', {}).get('StringWithMarkup', [{}])[0].get('String')
+                        ref = info.get('Reference', '')
+                        if text and ref:
+                            for src in PRIORITY_SOURCES:
+                                # Match source name in reference string
                                 if src['name'].lower() in ref.lower():
-                                    found_descriptions[src['label']] = text
-                if 'Section' in item:
-                    find_in_sections(item['Section'])
-
-        find_in_sections(sections)
-
-        # Priority selection
-        for src in DESC_SOURCES:
-            text = found_descriptions.get(src['label'])
-            if text:
-                word_count = len(text.split())
-                if word_count <= 150:
-                    return text, src['label']
-        return None, None
-    except:
-        return None, None
+                                    words = text.split()
+                                    if 10 < len(words) <= 150: # User limit: 150 words
+                                        if src['label'] not in found: found[src['label']] = text
+                for key in ['Section', 'Record']:
+                    if key in node: crawl(node[key])
+        
+        crawl(data)
+        # Apply strict priority
+        for src in PRIORITY_SOURCES:
+            if src['label'] in found: return found[src['label']]
+    except: pass
+    return None
 
 def get_molecule_data():
-    print("Building CID pool from high-quality sources...")
-    pool = []
-    # Fetch CIDs from our 4 sources to ensure we have valid candidates
-    for src in DESC_SOURCES:
-        url = f"https://pubchem.ncbi.nlm.nih.gov/rest/pug/compound/sourceall/{src['name'].replace(' ', '%20')}/cids/JSON"
-        try:
-            r = requests.get(url, timeout=10).json()
-            ids = r.get('IdentifierList', {}).get('CID', [])
-            pool.extend(ids)
-        except: continue
+    used = get_used_cids()
+    pool = get_molecule_pool()
     
     if not pool:
-        print("Error: Could not build CID pool.")
-        sys.exit(1)
+        print("Fallback: Using random search in low-CID range...")
+        pool = list(range(1, 1000000))
 
     random.shuffle(pool)
     
-    print(f"Pool size: {len(pool)}. Searching for a candidate...")
-    for cid in pool[:100]: # Check up to 100 random molecules from the quality pool
-        # 1. Get Synonyms and IUPAC
+    for cid in pool:
+        if str(cid) in used: continue
+        
         try:
-            prop_url = f"https://pubchem.ncbi.nlm.nih.gov/rest/pug/compound/cid/{cid}/property/IUPACName/JSON"
-            syn_url = f"https://pubchem.ncbi.nlm.nih.gov/rest/pug/compound/cid/{cid}/synonyms/JSON"
+            # 1. Get IUPAC and Synonyms
+            p_res = requests.get(f"https://pubchem.ncbi.nlm.nih.gov/rest/pug/compound/cid/{cid}/property/IUPACName/JSON", timeout=5).json()
+            s_res = requests.get(f"https://pubchem.ncbi.nlm.nih.gov/rest/pug/compound/cid/{cid}/synonyms/JSON", timeout=5).json()
             
-            p_res = requests.get(prop_url, timeout=5).json()
-            s_res = requests.get(syn_url, timeout=5).json()
+            iupac = p_res.get('PropertyTable', {}).get('Properties', [{}])[0].get('IUPACName', "N/A")
+            syns = s_res.get('InformationList', {}).get('Information', [{}])[0].get('Synonym', [])
             
-            iupac = p_res['PropertyTable']['Properties'][0].get('IUPACName')
-            all_syns = s_res.get('InformationList', {}).get('Information', [{}])[0].get('Synonym', [])
-            
-            if not iupac or not all_syns: continue
+            if not syns: continue
 
-            # 2. Filter Names
-            # Primary name: first non-bad name that isn't the IUPAC name
-            clean_syns = [s for s in all_syns if not is_bad_name(s) and s.lower() != iupac.lower()]
-            if not clean_syns: continue
+            # 2. Filter for Names (Must not be technical/bad)
+            clean_names = [s for s in syns if not is_bad_name(s, iupac)]
             
-            primary_name = clean_names[0] if 'clean_names' in locals() else clean_syns[0]
-            aka = [s for s in clean_syns if s != primary_name][:3]
+            # If no common name exists, skip. This prevents SCHEMBL-only molecules.
+            if not clean_names: continue
 
-            # 3. Get Description
-            desc, source_label = get_description_and_source(cid)
+            # 3. Get Description based on priority
+            desc = get_description_logic(cid)
             if not desc: continue
 
             return {
-                "name": primary_name,
-                "aka": aka,
+                "name": clean_names[0],
+                "aka": clean_names[1:4], # Up to 3
                 "iupac": iupac,
                 "description": desc,
                 "cid": cid,
@@ -127,16 +136,13 @@ def get_molecule_data():
             }
         except: continue
 
-    print("Failed to find a suitable molecule in the pool.")
-    sys.exit(1)
-
 def post_to_telegram(data):
     if not TELEGRAM_TOKEN: return
-    
     aka_text = ", ".join(data['aka']) if data['aka'] else "None"
     
-    # Clean text for Markdown (escape underscores which are common in chem)
-    def clean(t): return str(t).replace("_", "\\_").replace("*", "\\*")
+    # Escape characters that break Markdown
+    def clean(t):
+        return str(t).replace("_", "\\_").replace("*", "\\*").replace("[", "\\[").replace("`", "\\`").replace("(", "\\(").replace(")", "\\)")
 
     caption = (
         f"*Name:* {clean(data['name'])}\n"
@@ -146,20 +152,18 @@ def post_to_telegram(data):
         f"*PubChem Link:* https://pubchem.ncbi.nlm.nih.gov/compound/{data['cid']}"
     )
 
-    api_url = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendPhoto"
-    payload = {
-        "chat_id": CHANNEL_ID,
-        "photo": data['image'],
-        "caption": caption,
-        "parse_mode": "Markdown"
-    }
-    
-    r = requests.post(api_url, data=payload)
+    payload = {"chat_id": CHANNEL_ID, "photo": data['image'], "caption": caption, "parse_mode": "Markdown"}
+    r = requests.post(f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendPhoto", data=payload)
     if r.status_code == 200:
-        print(f"Posted: {data['name']}")
+        save_cid(data['cid'])
+        print(f"Successfully posted: {data['name']}")
     else:
-        print(f"Error: {r.text}")
+        # Fallback if markdown still fails
+        payload["parse_mode"] = ""
+        requests.post(f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendPhoto", data=payload)
+        save_cid(data['cid'])
 
 if __name__ == "__main__":
-    mol_data = get_molecule_data()
-    post_to_telegram(mol_data)
+    mol = get_molecule_data()
+    if mol:
+        post_to_telegram(mol)
