@@ -1,5 +1,4 @@
 name: Daily Molecule Post
-
 on:
   schedule:
     - cron: '0 18 * * *'
@@ -9,7 +8,7 @@ jobs:
   run-bot:
     runs-on: ubuntu-latest
     permissions:
-      contents: write  # Allows the bot to save the posted_cids.txt
+      contents: write
     steps:
       - name: Checkout code
         uses: actions/checkout@v3
@@ -27,10 +26,10 @@ jobs:
           TELEGRAM_TOKEN: ${{ secrets.TELEGRAM_TOKEN }}
         run: python main.py
 
-      - name: Commit and push changes
+      - name: Commit history
         run: |
           git config --local user.email "action@github.com"
           git config --local user.name "GitHub Action"
           git add posted_cids.txt
-          git commit -m "Update posted CIDs" || exit 0
+          git commit -m "Update post history" || exit 0
           git push
