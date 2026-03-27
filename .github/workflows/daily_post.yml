@@ -2,7 +2,7 @@ name: Daily Molecule Post
 
 on:
   schedule:
-    - cron: '30 9 * * *' # Runs daily at 18:00 UTC
+    - cron: '0 11 * * *' # Runs daily at 18:00 UTC
   workflow_dispatch:
 
 jobs:
